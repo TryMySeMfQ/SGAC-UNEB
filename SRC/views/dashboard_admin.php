@@ -32,52 +32,17 @@ if ($admin = $result->fetch_assoc()) {
     $_SESSION['nome'] = 'Administrador';
     $_SESSION['curso_id'] = null;
 }
-
 $stmt->close();
 
 $matricula_aluno = '';
 $atividades = [];
-$total_horas = 0;
+$total_horas_validadas = 0;
+$total_horas_pendentes = 0;
 $nome_aluno = '';
 $errorMessage = '';
 $mensagem_enviada = false;
 
-/// Consultar o tipo de curso do aluno
-if (!empty($matricula_aluno)) {
-    $query_tipo_curso_aluno = "SELECT tipo_curso FROM alunos WHERE matricula = ?";
-    $stmtAlunoCurso = $conexao->prepare($query_tipo_curso_aluno);
-    $stmtAlunoCurso->bind_param('i', $matricula_aluno); // Aqui o $matricula_aluno é passado
-    $stmtAlunoCurso->execute();
-    $resultAlunoCurso = $stmtAlunoCurso->get_result();
-
-    // Se o aluno for encontrado
-    if ($alunoCurso = $resultAlunoCurso->fetch_assoc()) {
-        // Atribuir o tipo de curso do aluno
-        $tipo_curso_aluno = $alunoCurso['tipo_curso'];
-    } else {
-        $errorMessage = 'Aluno não encontrado.';
-    }
-    $stmtAlunoCurso->close();
-} else {
-    $errorMessage = 'Matrícula do aluno não fornecida.';
-}
-
-// Verifica se $tipo_curso_aluno foi definido antes de usá-lo
-if (isset($tipo_curso_aluno)) {
-    // Seleciona a tabela de acordo com o tipo de curso do aluno
-    if ($tipo_curso_aluno == 'bacharelado') {
-        $tabela_barema = 'baremabacharelado';  // Se for bacharelado, usa a tabela de bacharelado
-    } elseif ($tipo_curso_aluno == 'licenciatura') {
-        $tabela_barema = 'baremalicenciatura';  // Se for licenciatura, usa a tabela de licenciatura
-    } else {
-        $errorMessage = 'Tipo de curso do aluno não encontrado ou inválido.';
-    }
-} else {
-    $errorMessage = 'Erro: Tipo de curso do aluno não está disponível.';
-}
-
-
-// Consultar o tipo de curso do administrador
+// Consultar tipo de curso do administrador
 $query_tipo_curso = "SELECT tipo FROM cursos WHERE id = ?";
 $stmtCurso = $conexao->prepare($query_tipo_curso);
 $stmtCurso->bind_param('i', $_SESSION['curso_id']);
@@ -87,62 +52,113 @@ $curso = $resultCurso->fetch_assoc();
 $tipo_curso = $curso['tipo'] ?? null;
 $tabela_barema = ($tipo_curso === 'bacharelado') ? 'baremabacharelado' : 'baremalicenciatura';
 $stmtCurso->close();
+$tipo_curso_aluno = ''; 
 
-// Obter informações do aluno
-$queryAluno = "SELECT tipo_curso FROM alunos WHERE matricula = ?";
-$stmtAluno = $conexao->prepare($queryAluno);
-$stmtAluno->bind_param('i', $matricula);
+// Carregar as atividades pendentes para o curso do administrador
+// Correct way to prepare and bind parameters
+$query_pendentes = "SELECT a.*, b.nome AS categoria_nome, al.nome AS aluno_nome, al.matricula AS aluno_matricula
+                    FROM atividades a
+                    LEFT JOIN $tabela_barema b ON a.categoria_id = b.id
+                    LEFT JOIN alunos al ON a.matricula_aluno = al.matricula
+                    WHERE a.validado = 0 
+                    AND a.pendente_atualizacao = 0
+                    AND al.curso_id = ?";
+
+// Prepare the statement
+$stmt_pendentes = $conexao->prepare($query_pendentes);
+if (!$stmt_pendentes) {
+    die('Erro na preparação da consulta: ' . $conexao->error);
+}
+
+// Bind the parameter (course_id)
+$stmt_pendentes->bind_param('i', $_SESSION['curso_id']);
+
+// Execute the statement
+$stmt_pendentes->execute();
+
+// Get the result
+$result_pendentes = $stmt_pendentes->get_result();
+$atividades_pendentes = [];
+
+if ($result_pendentes && $result_pendentes->num_rows > 0) {
+    while ($atividade = $result_pendentes->fetch_assoc()) {
+        $atividades_pendentes[] = $atividade;
+    }
+}
+
+// Close the prepared statement
+$stmt_pendentes->close();
+
+// Consultar atividades pendentes
+$query_pendentes = "SELECT COUNT(*) AS total_pendentes 
+                    FROM atividades a
+                    LEFT JOIN alunos al ON a.matricula_aluno = al.matricula
+                    WHERE a.validado = 0 
+                    AND a.pendente_atualizacao = 0 
+                    AND al.curso_id = ?";
+$stmt_pendentes = $conexao->prepare($query_pendentes);
+$stmt_pendentes->bind_param('i', $_SESSION['curso_id']);
+$stmt_pendentes->execute();
+$result_pendentes = $stmt_pendentes->get_result();
+$total_pendentes = $result_pendentes ? $result_pendentes->fetch_assoc()['total_pendentes'] : 0;
+$stmt_pendentes->close();
+
+
+// Processar formulário de busca de atividades
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['matricula_aluno'])) {
+    $matricula_aluno = $_POST['matricula_aluno'];
+
+$tabela_barema = ($tipo_curso === 'bacharelado') ? 'baremabacharelado' : 'baremalicenciatura';
+
+    
+
+    // Definir a variável $tipo_curso_aluno antes do uso
+$tipo_curso_aluno = ''; 
+
+$stmtAluno = $conexao->prepare("SELECT nome, curso_id, tipo_curso FROM alunos WHERE matricula = ?");
+$stmtAluno->bind_param('i', $matricula_aluno);
 $stmtAluno->execute();
 $resultAluno = $stmtAluno->get_result();
-$aluno = $resultAluno->fetch_assoc();
-if ($aluno) {
-    $tipo_curso = $aluno['tipo_curso'];
+if ($aluno = $resultAluno->fetch_assoc()) {
+    $nome_aluno = $aluno['nome'];
+    $curso_aluno_id = $aluno['curso_id'];
+    $tipo_curso_aluno = $aluno['tipo_curso']; // Definir corretamente
 } else {
-    $errorMessage = 'Aluno não encontrado.';
+    $errorMessage = "Erro: Aluno não encontrado.";
 }
 $stmtAluno->close();
 
-function calcularHorasComplementares($atividades, $tipo_curso) {
-    global $conexao;
-    $total_ac_hours = 0;
+// Agora você pode usar $tipo_curso_aluno com segurança
 
-    // Selecionar o barema correto de acordo com o tipo de curso
-    $tabela_barema = ($tipo_curso === 'bacharelado') ? 'baremabacharelado' : 'baremalicenciatura';
-    foreach ($atividades as $atividade) {
-        $category_id = $atividade['categoria_id'];
-        $us_hora = $atividade['horas'];
 
-        // Pega os dados da categoria no barema correspondente
-        $query = "SELECT horas_ad, horas_ac, horas_max FROM $tabela_barema WHERE id = ?";
-        $stmt = mysqli_prepare($conexao, $query);
-        mysqli_stmt_bind_param($stmt, 'i', $category_id);
-        mysqli_stmt_execute($stmt);
-        $result = mysqli_stmt_get_result($stmt);
-        $row = mysqli_fetch_assoc($result);
-
-        if ($row) {
-            $horas_ad = $row['horas_ad'];
-            $horas_ac = $row['horas_ac'];
-            $max_ac_hours = $row['horas_max'];
-
-            // Calcula as horas aproveitáveis
-            $ac_hours = floor($us_hora / $horas_ad) * $horas_ac;
-
-            // Limita ao máximo permitido
-            $ac_hours = min($ac_hours, $max_ac_hours);
-
-            // Adiciona ao total de horas aproveitáveis
-            $total_ac_hours += $ac_hours;
-        } else {
-            // echo "Categoria não encontrada para ID: $category_id";
+    // Verificar se o curso do aluno corresponde ao curso do administrador
+    if (!empty($curso_aluno_id) && $curso_aluno_id != $_SESSION['curso_id']) {
+        $errorMessage = "Erro: Você só pode acessar atividades de alunos do seu curso.";
+    } else {
+        // Consultar atividades do aluno
+        $stmtAtividades = $conexao->prepare("SELECT a.*, b.nome AS categoria_nome
+                                            FROM atividades a
+                                            LEFT JOIN $tabela_barema b ON a.categoria_id = b.id
+                                            WHERE a.matricula_aluno = ?;");
+        $stmtAtividades->bind_param('i', $matricula_aluno);
+        $stmtAtividades->execute();
+        $resultAtividades = $stmtAtividades->get_result();
+        while ($atividade = $resultAtividades->fetch_assoc()) {
+            $atividades[] = $atividade;
+            if ($atividade['validado']) {
+                $total_horas_validadas += $atividade['horas'];
+            } else {
+                $total_horas_pendentes += $atividade['horas'];
+            }
         }
+        $stmtAtividades->close();
     }
-
-    return $total_ac_hours;
 }
 
+// Validar ou negar atividade
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    if (isset($_POST['validar_atividade'])) {
+    // Validar atividade
+    if (isset($_POST['validar_atividade']) && isset($_POST['atividade_id'])) {
         $atividade_id = intval($_POST['atividade_id']);
         $query_validar = "UPDATE atividades SET validado = 1 WHERE id = ?";
         $stmt_validar = $conexao->prepare($query_validar);
@@ -155,68 +171,54 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $stmt_validar->close();
     }
 
-    if (isset($_POST['matricula_aluno']) && !empty($_POST['matricula_aluno'])) {
-        $matricula_aluno = $_POST['matricula_aluno'];
-
-        // Obter o curso do aluno
-        $stmtAluno = $conexao->prepare("SELECT nome, curso_id FROM alunos WHERE matricula = ?");
-        $stmtAluno->bind_param('i', $matricula_aluno);
-        $stmtAluno->execute();
-        $resultAluno = $stmtAluno->get_result();
-        $aluno = $resultAluno->fetch_assoc();
-        if ($aluno) {
-            $nome_aluno = $aluno['nome'];
-            $curso_aluno_id = $aluno['curso_id'];
-        } else {
-            $nome_aluno = 'Nome não encontrado';
-            $curso_aluno_id = null;
-        }
-        $stmtAluno->close();
-
-        // Verificar se o curso do aluno corresponde ao curso do administrador
-        if ($curso_aluno_id != $_SESSION['curso_id']) {
-            $errorMessage = "Erro: Você só pode acessar atividades de alunos do seu curso.";
-        } else {
-            // Consultar atividades do aluno
-            $stmtAtividades = $conexao->prepare("SELECT * FROM atividades WHERE matricula_aluno = ?");
-            $stmtAtividades->bind_param('i', $matricula_aluno);
-            $stmtAtividades->execute();
-            $resultAtividades = $stmtAtividades->get_result();
-            $atividades = [];
-            while ($atividade = $resultAtividades->fetch_assoc()) {
-                $atividades[] = $atividade;
+    // Negar atividade
+    if (isset($_POST['acao']) && $_POST['acao'] === 'negar') {
+        $atividade_id = intval($_POST['atividade_id']);
+        $motivo_negacao = trim($_POST['justificativa']);
+        if (!empty($atividade_id) && !empty($motivo_negacao)) {
+            $query_negar = "UPDATE atividades SET status = 'pendente', motivo_negacao = ?, pendente_atualizacao = 1, notificado = 0 WHERE id = ?";
+            $stmt_negar = $conexao->prepare($query_negar);
+            $stmt_negar->bind_param('si', $motivo_negacao, $atividade_id);
+            if ($stmt_negar->execute()) {
+                $mensagem_enviada = true;
+            } else {
+                $errorMessage = "Erro ao negar a atividade: " . $stmt_negar->error;
             }
-            $stmtAtividades->close();
+            $stmt_negar->close();
+        } else {
+            $errorMessage = "Erro: Atividade ou justificativa não fornecida.";
         }
     }
 }
 
-// Consultar o número de atividades pendentes de validação
-$query_pendentes = "SELECT COUNT(*) as total_pendentes FROM atividades WHERE validado = 0 AND pendente_atualizacao = 0";
-$result_pendentes = $conexao->query($query_pendentes);
-$total_pendentes = $result_pendentes ? $result_pendentes->fetch_assoc()['total_pendentes'] : 0;
 
-// Consultar os alunos com atividades pendentes de validação
-$query_alunos_pendentes = "SELECT DISTINCT u.matricula, u.nome FROM atividades a JOIN alunos u ON a.matricula_aluno = u.matricula WHERE a.validado = 0 AND a.pendente_atualizacao = 0";
-$result_alunos_pendentes = $conexao->query($query_alunos_pendentes);
-$alunos_pendentes = [];
-if ($result_alunos_pendentes) {
-    while ($row = $result_alunos_pendentes->fetch_assoc()) {
-        $alunos_pendentes[] = $row;
-    }
+$queryAtualizarStatus = "
+    UPDATE atividades 
+    SET status = ?, notificado = 0 
+    WHERE id = ?";
+$stmt = $conexao->prepare($queryAtualizarStatus);
+$stmt->bind_param('si', $novo_status, $atividade_id);
+$stmt->execute();
+
+$atividades = mysqli_fetch_all($result, MYSQLI_ASSOC);
+
+$atividades = [];
+
+// Primeiro, obter o tipo de curso do aluno
+$queryTipoCurso = "SELECT tipo_curso FROM alunos WHERE matricula = ?";
+$stmtTipoCurso = $conexao->prepare($queryTipoCurso);
+$stmtTipoCurso->bind_param('i', $matricula_aluno);
+$stmtTipoCurso->execute();
+$resultTipoCurso = $stmtTipoCurso->get_result();
+
+// Verificar se o tipo de curso foi encontrado
+if ($row = $resultTipoCurso->fetch_assoc()) {
+    $tipo_curso_aluno = $row['tipo_curso'];
+} else {
+    // Se o tipo de curso não for encontrado, você pode definir um valor padrão
+    $tipo_curso_aluno = null;
 }
-
-// Calcular total de horas validadas e pendentes
-$total_horas_validadas = 0;
-$total_horas_pendentes = 0;
-foreach ($atividades as $atividade) {
-    if ($atividade['validado']) {
-        $total_horas_validadas += $atividade['horas'];
-    } else {
-        $total_horas_pendentes += $atividade['horas'];
-    }
-}
-
+$stmtTipoCurso->close();
 
 
 ?>
@@ -253,27 +255,58 @@ foreach ($atividades as $atividade) {
 </div>
 <div class="container mt-4">
     <div class="card p-4">
-        <h4>Alunos com Atividades Pendentes:</h4>
-        <?php if (!empty($alunos_pendentes)) { ?>
-            <div class="alert alert-info text-center">
-    <h4>Atividades pendentes de validação: <strong><?php echo htmlspecialchars($total_pendentes ?? 0); ?></strong></h4>
-</div>
-<ul class="list-group">
-    <?php foreach ($alunos_pendentes as $aluno) { ?>
-        <li class="list-group-item">
-            <strong>Nome:</strong> <?= htmlspecialchars($aluno['nome'] ?? ''); ?> |
-            <strong>Matrícula:</strong> <?= htmlspecialchars($aluno['matricula'] ?? ''); ?>
-            <a href="?matricula_aluno=<?= htmlspecialchars($aluno['matricula'] ?? ''); ?>" class="btn btn-primary btn-sm float-right">
-                Ver Atividades
-            </a>
-        </li>
-    <?php } ?>
-</ul>
+        <h2>Atividades Pendentes de Validação</h2>
+        <?php 
+        // Simulando atividades pendentes
+        if (!empty($atividades_pendentes)) { ?>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Matricula</th>
+                        <th>Nome do Aluno</th>
+                        <th>Descrição</th>
+                        <th>Horas</th>
+                        <th>Certificado</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($atividades_pendentes as $atividade) { ?>
+                        <tr>
+                            <td><?= htmlspecialchars($atividade['aluno_matricula']) ?></td>
+                            <td><?= htmlspecialchars($atividade['aluno_nome']) ?></td>
+                            <td><?= htmlspecialchars($atividade['descricao']) ?></td>
+                            <td><?= htmlspecialchars($atividade['horas']) ?></td>
+                            <td><?= $atividade['certificado'] ? "<a href='" . htmlspecialchars($atividade['certificado']) . "' target='_blank'>Visualizar</a>" : "Nenhum certificado disponível" ?></td>
+                            <td><?= 'Pendente' ?></td>
+                            <td>
+                            <div class="acoes-container">
+                                <form method="post" action="" class="form-validar">
+                                    <input type="hidden" name="matricula_aluno" value="<?= htmlspecialchars($matricula_aluno ?? '') ?>">
+                                    <input type="hidden" name="atividade_id" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
+                                    <input type="hidden" name="validar_atividade" value="validar">
+                                    <button type="submit" class="btn btn-success">Validar</button>
+                                </form>
 
+                                <form method="post" action="" class="form-negar">
+                                    <input type="hidden" name="matricula_aluno" value="<?= htmlspecialchars($matricula_aluno ?? '') ?>">
+                                    <input type="hidden" name="atividade_id" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
+                                    <input type="hidden" name="acao" value="negar">
+                                    <input type="text" name="justificativa" class="form-control reason-input" placeholder="Motivo da negação" required>
+                                    <button type="submit" class="btn btn-danger mt-2">Negar</button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php } ?>
+                </tbody>
+            </table>
         <?php } else { ?>
-            <p>Nenhum aluno com atividades pendentes de validação.</p>
+            <p>Não há atividades pendentes.</p>
         <?php } ?>
     </div>
+</div>
+
 <div class="container mt-5">
     <div class="card p-4 my-4">
         <form method="post" action="">
@@ -282,6 +315,12 @@ foreach ($atividades as $atividade) {
                 <input type="text" id="matricula_aluno" name="matricula_aluno" class="form-control" value="<?= htmlspecialchars($matricula_aluno) ?>" required>
             </div>
             <input type="submit" value="Buscar" class="btn btn-primary">
+            <?php if (!empty($errorMessage)) { ?>
+    <div class="alert alert-danger">
+        <?= htmlspecialchars($errorMessage); ?>
+    </div>
+<?php } ?>
+
         </form>
     </div>
     <div class="card p-4 my-4">
@@ -304,33 +343,30 @@ foreach ($atividades as $atividade) {
         </tr>
     </thead>
     <tbody>
-<?php foreach ($atividades as $atividade) {
-    $dias_pendentes = isset($atividade['data_envio']) 
-        ? (time() - strtotime($atividade['data_envio'])) / (60 * 60 * 24) 
-        : 0; 
-    $classeDestaque = ($dias_pendentes > 30) ? 'alert-warning' : '';
-?>
-    <tr class="<?= $classeDestaque ?>">
-        <td><?= htmlspecialchars($atividade['descricao'] ?? 'Descrição não disponível') ?></td>
-        <td><?= htmlspecialchars($atividade['horas'] ?? '0') ?></td>
-        <td><?= htmlspecialchars($atividade['categoria_nome'] ?? 'Categoria não encontrada') ?></td>
-        <td><?= $atividade['certificado'] ? "<a href='" . htmlspecialchars($atividade['certificado']) . "' target='_blank'>Visualizar</a>" : "Nenhum certificado disponível" ?></td>
-        <td><?= $atividade['validado'] ? 'Validado' : ($atividade['pendente_atualizacao'] ? 'Pendente de Atualização' : 'Não Validado') ?></td>
-        <td>
+    <?php foreach ($atividades as $atividade) {
+                $status = $atividade['validado'] ? 'Validado' : ($atividade['pendente_atualizacao'] ? 'Pendente de Atualização' : 'Não Validado');
+            ?>
+                <tr>
+                    <td><?= htmlspecialchars($atividade['descricao'] ?? 'Descrição não disponível') ?></td>
+                    <td><?= htmlspecialchars($atividade['horas'] ?? '0') ?></td>
+                    <td><?= htmlspecialchars($atividade['categoria_nome'] ?? 'Categoria não encontrada') ?></td>
+                    <td><?= $atividade['certificado'] ? "<a href='" . htmlspecialchars($atividade['certificado']) . "' target='_blank'>Visualizar</a>" : "Nenhum certificado disponível" ?></td>
+                    <td><?= $status ?></td>
+                    <td>
             <?php if ($atividade['pendente_atualizacao']) { ?>
                 <span>Pendente de Atualização do Aluno</span>
             <?php } elseif (!$atividade['validado']) { ?>
                 <div class="acoes-container">
                     <form method="post" action="" class="form-validar">
                         <input type="hidden" name="matricula_aluno" value="<?= htmlspecialchars($matricula_aluno ?? '') ?>">
-                        <input type="hidden" name="id_atividade" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
-                        <input type="hidden" name="acao" value="validar">
+                        <input type="hidden" name="atividade_id" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
+                        <input type="hidden" name="validar_atividade" value="validar">
                         <button type="submit" class="btn btn-success">Validar</button>
                     </form>
 
                     <form method="post" action="" class="form-negar">
                         <input type="hidden" name="matricula_aluno" value="<?= htmlspecialchars($matricula_aluno ?? '') ?>">
-                        <input type="hidden" name="id_atividade" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
+                        <input type="hidden" name="atividade_id" value="<?= htmlspecialchars($atividade['id'] ?? '') ?>">
                         <input type="hidden" name="acao" value="negar">
                         <input type="text" name="justificativa" class="form-control reason-input" placeholder="Motivo da negação" required>
                         <button type="submit" class="btn btn-danger mt-2">Negar</button>

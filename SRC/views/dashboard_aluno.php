@@ -12,45 +12,35 @@ if (!isset($_SESSION['matricula']) || $_SESSION['tipo'] != 'aluno') {
     exit();
 }
 
-
-
 $matricula = $_SESSION['matricula'];
 
-// Função para calcular horas complementares com limite por categoria, considerando o curso do aluno
-$queryCurso = "SELECT tipo_curso FROM alunos WHERE matricula = ?";
+// Obtém o tipo de curso do aluno
+$queryCurso = "SELECT tipo_curso, nome FROM alunos WHERE matricula = ?";
 $stmtCurso = mysqli_prepare($conexao, $queryCurso);
 mysqli_stmt_bind_param($stmtCurso, 'i', $matricula);
 mysqli_stmt_execute($stmtCurso);
 $resultCurso = mysqli_stmt_get_result($stmtCurso);
 $aluno = mysqli_fetch_assoc($resultCurso);
 
-// Verifique se o aluno foi encontrado
 if ($aluno) {
-    $tipo_curso = $aluno['tipo_curso']; // Atribuindo à variável
+    $tipo_curso = $aluno['tipo_curso'];
+    $_SESSION['nome'] = $aluno['nome'];
 } else {
     $error_message = 'Aluno não encontrado.';
-    // Tratar o erro (por exemplo, redirecionar ou exibir uma mensagem)
+    header('Location: login_aluno.php');
+    exit();
 }
 
-// Função para calcular horas complementares com limite por categoria, considerando o curso do aluno
+// Função para calcular horas complementares com limite por categoria
 function calcularHorasComplementares($atividades, $tipo_curso) {
-    global $conexao; 
+    global $conexao;
     $total_ac_hours = 0;
-
-    // Seleciona o barema correto de acordo com o tipo de curso
-    if ($tipo_curso === 'bacharelado') {
-        $tabela_barema = 'baremabacharelado';
-    } elseif ($tipo_curso === 'licenciatura') {
-        $tabela_barema = 'baremalicenciatura';
-    } else {
-        return 0; // Caso o tipo de curso seja inválido
-    }
+    $tabela_barema = $tipo_curso === 'bacharelado' ? 'baremabacharelado' : 'baremalicenciatura';
 
     foreach ($atividades as $atividade) {
         $category_id = $atividade['categoria_id'];
-        $us_hora = $atividade['horas']; // Horas informadas pelo usuário
+        $us_hora = $atividade['horas'];
 
-        // Pega os dados da categoria no barema correspondente
         $query = "SELECT horas_ad, horas_ac, horas_max FROM $tabela_barema WHERE id = ?";
         $stmt = mysqli_prepare($conexao, $query);
         mysqli_stmt_bind_param($stmt, 'i', $category_id);
@@ -63,16 +53,10 @@ function calcularHorasComplementares($atividades, $tipo_curso) {
             $horas_ac = $row['horas_ac'];
             $max_ac_hours = $row['horas_max'];
 
-            // Calcula as horas aproveitáveis
             $ac_hours = floor($us_hora / $horas_ad) * $horas_ac;
-
-            // Limita ao máximo permitido
             $ac_hours = min($ac_hours, $max_ac_hours);
-
-            // Adiciona ao total de horas aproveitáveis
             $total_ac_hours += $ac_hours;
         } else {
-            // Tratar erro caso a categoria não seja encontrada
             echo "Categoria não encontrada para ID: $category_id";
         }
     }
@@ -80,60 +64,35 @@ function calcularHorasComplementares($atividades, $tipo_curso) {
     return $total_ac_hours;
 }
 
-// Processar o envio da nova atividade
-$queryCursos = "SELECT tipo_curso FROM alunos WHERE matricula = ?";
-$stmtCursos = mysqli_prepare($conexao, $queryCursos);
-mysqli_stmt_bind_param($stmtCursos, 'i', $matricula);
-mysqli_stmt_execute($stmtCursos);
-$resultCursos = mysqli_stmt_get_result($stmtCursos);
-$aluno = mysqli_fetch_assoc($resultCursos);
-
-if ($aluno) {
-    $tipo_curso = $aluno['tipo_curso']; // Atribuindo à variável
-} else {
-    // Tratar erro se o aluno não for encontrado
-    $error_message = 'Aluno não encontrado.';
-}
-
-if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // Obter os dados do formulário
+// Processar envio de nova atividade
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['descricao'])) {
     $descricao = $_POST['descricao'] ?? '';
     $horas = $_POST['horas'] ?? '';
     $certificado = $_FILES['certificado'] ?? null;
-    $categoria_id = $_POST['categoria'] ?? null; // Capturando o categoria_id do formulário
+    $categoria_id = $_POST['categoria'] ?? null;
 
-    // Validar dados
+    $total_horas_exigidas = 200; // Limite de horas complementares
+    $total_horas = 0; // Inicializa o total
+
     if (empty($descricao) || empty($horas) || empty($certificado['name']) || empty($categoria_id)) {
         $error_message = 'Todos os campos são obrigatórios.';
     } else {
-        // Calcula as horas válidas com base no tipo de curso
         $horas_validas = calcularHorasComplementares([['categoria_id' => $categoria_id, 'horas' => $horas]], $tipo_curso);
 
         if ($horas_validas == 0) {
             $error_message = 'As horas informadas excedem o limite permitido para esta categoria.';
         } else {
-            // Processar o upload do certificado
             $upload_dir = 'uploads/';
-            
-            // Criar o diretório se não existir
-            if (!file_exists($upload_dir)) {
-                mkdir($upload_dir, 0777, true);
-            }
+            if (!file_exists($upload_dir)) mkdir($upload_dir, 0777, true);
 
             $upload_file = $upload_dir . basename($certificado['name']);
-            $upload_ok = 1;
             $file_type = strtolower(pathinfo($upload_file, PATHINFO_EXTENSION));
 
-            // Verificar se o arquivo é uma imagem ou PDF
-            if ($file_type != 'pdf' && !in_array($file_type, ['jpg', 'jpeg', 'png', 'gif'])) {
+            if (!in_array($file_type, ['pdf', 'jpg', 'jpeg', 'png', 'gif'])) {
                 $error_message = 'Somente arquivos PDF e imagens são permitidos.';
-                $upload_ok = 0;
-            }
-
-            // Verificar se o upload foi bem-sucedido
-            if ($upload_ok && move_uploaded_file($certificado['tmp_name'], $upload_file)) {
-                // Inserir dados no banco de dados, incluindo horas ajustadas
-                $query = "INSERT INTO atividades (matricula_aluno, descricao, horas, certificado, status, categoria_id) VALUES (?, ?, ?, ?, 'pendente', ?)";
+            } elseif (move_uploaded_file($certificado['tmp_name'], $upload_file)) {
+                $query = "INSERT INTO atividades (matricula_aluno, descricao, horas, certificado, status, categoria_id) 
+                          VALUES (?, ?, ?, ?, 'pendente', ?)";
                 $stmt = $conexao->prepare($query);
                 $stmt->bind_param('isssi', $matricula, $descricao, $horas_validas, $upload_file, $categoria_id);
 
@@ -149,30 +108,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
 }
-
-
-
-// Consulta as atividades do aluno
-$tabela_barema = $tipo_curso === 'bacharelado' ? 'baremabacharelado' : 'baremalicenciatura';
-
-// Consulta as atividades do aluno
-$query = "
-    SELECT a.*, b.nome AS categoria_nome
-    FROM atividades a
-    LEFT JOIN $tabela_barema b ON a.categoria_id = b.id
-    WHERE a.matricula_aluno = ?
-";
-$stmt = mysqli_prepare($conexao, $query);
-mysqli_stmt_bind_param($stmt, 'i', $matricula);
-mysqli_stmt_execute($stmt);
-$result = mysqli_stmt_get_result($stmt);
-
-// Consulta as mensagens do aluno
-$queryMensagens = "SELECT * FROM mensagens WHERE matricula_aluno = ?";
-$stmtMensagens = mysqli_prepare($conexao, $queryMensagens);
-mysqli_stmt_bind_param($stmtMensagens, 'i', $matricula);
-mysqli_stmt_execute($stmtMensagens);
-$resultMensagens = mysqli_stmt_get_result($stmtMensagens);
 
 // Atualiza a atividade
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['atualizar_atividade'])) {
@@ -195,48 +130,61 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['atualizar_atividade'])
 
     if (mysqli_stmt_execute($stmtUpdate)) {
         $success_message = 'Atividade atualizada com sucesso!';
-        header("Location: login_aluno.php"); // Redireciona para a mesma página ou página de sucesso
+        header("Location: dashboard_aluno.php"); // Redireciona para a mesma página ou página de sucesso
         exit();
     } else {
         $error_message = 'Erro ao atualizar a atividade: ' . mysqli_error($conexao);
     }
 }
 
-// Calcula o total de horas validadas
-$total_horas_exigidas = 200; // Exemplo: 200 horas
-$total_horas = 0;
+// Consulta atividades do aluno
+$tabela_barema = $tipo_curso === 'bacharelado' ? 'baremabacharelado' : 'baremalicenciatura';
+$query = "
+    SELECT a.*, b.nome AS categoria_nome
+    FROM atividades a
+    LEFT JOIN $tabela_barema b ON a.categoria_id = b.id
+    WHERE a.matricula_aluno = ?
+";
+$stmt = mysqli_prepare($conexao, $query);
+mysqli_stmt_bind_param($stmt, 'i', $matricula);
+mysqli_stmt_execute($stmt);
+$result = mysqli_stmt_get_result($stmt);
 $atividades = mysqli_fetch_all($result, MYSQLI_ASSOC);
+
+// Calcula total de horas validadas (limite de 200 horas)
+$total_horas_exigidas = 200;
+$total_horas = 0;
+
 foreach ($atividades as $atividade) {
     if ($atividade['validado']) {
-        $total_horas += $atividade['horas'];
+        $horas_validas = min($atividade['horas'], $total_horas_exigidas - $total_horas);
+        $total_horas += $horas_validas;
+        if ($total_horas >= $total_horas_exigidas) break;
     }
 }
 
-// Calcule as horas faltantes
-$horas_faltantes = $total_horas_exigidas - $total_horas;
+$horas_faltantes = max(0, $total_horas_exigidas - $total_horas);
 
-// Recupera todas as atividades
-$atividadesValidas = array_filter($atividades, function($atividade) {
-    return $atividade['validado'];
-});
 
-// Codifica para JSON
-$jsonAtividades = json_encode($atividadesValidas, JSON_UNESCAPED_UNICODE);
+// Notificações de atividades
+$queryNotificacao = "
+    SELECT id, descricao, status 
+    FROM atividades 
+    WHERE matricula_aluno = ? AND notificado = 0 AND (status = 'aprovado' OR status = 'negado')";
+$stmtNotificacao = mysqli_prepare($conexao, $queryNotificacao);
+mysqli_stmt_bind_param($stmtNotificacao, 'i', $matricula);
+mysqli_stmt_execute($stmtNotificacao);
+$resultNotificacao = mysqli_stmt_get_result($stmtNotificacao);
+$atividadesNotificacao = mysqli_fetch_all($resultNotificacao, MYSQLI_ASSOC);
 
-// Após o login, recupera o nome
-$queryNome = "SELECT nome FROM alunos WHERE matricula = ?";
-$stmtNome = mysqli_prepare($conexao, $queryNome);
-mysqli_stmt_bind_param($stmtNome, 'i', $matricula);
-mysqli_stmt_execute($stmtNome);
-$resultNome = mysqli_stmt_get_result($stmtNome);
-$aluno = mysqli_fetch_assoc($resultNome);
-
-if ($aluno) {
-    $_SESSION['nome'] = $aluno['nome']; // Armazena o nome do aluno na sessão
+if (!empty($atividadesNotificacao)) {
+    $ids = implode(',', array_column($atividadesNotificacao, 'id'));
+    $queryUpdateNotificado = "UPDATE atividades SET notificado = 1 WHERE id IN ($ids)";
+    mysqli_query($conexao, $queryUpdateNotificado);
 }
-
-
 ?>
+
+
 
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -313,7 +261,7 @@ if ($aluno) {
         <div class="card p-4 my-4">
             <div id="edit-form-container" style="display: none;">
                 <h3>Editar Atividade</h3>
-                <form method="POST" enctype="multipart/form-data">
+                <form method="POST" action = "" enctype="multipart/form-data">
                     <input type="hidden" name="atividade_id" id="edit-atividade-id">
                     <div class="form-group">
                         <label for="nova_descricao">Nova Descrição</label>
@@ -327,7 +275,7 @@ if ($aluno) {
                         <label for="novo_certificado">Novo Certificado (opcional)</label>
                         <input type="file" class="form-control" name="novo_certificado">
                     </div>
-                    <button type="submit" class="btn btn-primary" name="editar_atividade">Atualizar Atividade</button>
+                    <button type="submit" class="btn btn-primary" name="atualizar_atividade">Atualizar Atividade</button>
                     <button type="button" class="btn btn-secondary" onclick="hideEditForm()">Cancelar</button>
                 </form>
             </div>
@@ -353,71 +301,74 @@ if ($aluno) {
     }
 </script>
 
-    <div class="card p-4 my-4">
-        <h2>Mensagens do Administrador</h2>
-        <?php if (mysqli_num_rows($resultMensagens) > 0) { ?>
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>Data</th>
-                        <th>Mensagem</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php while ($mensagem = mysqli_fetch_assoc($resultMensagens)) { ?>
-                        <tr>
-                            <td><?php echo htmlspecialchars($mensagem['data_envio']); ?></td>
-                            <td><?php echo htmlspecialchars($mensagem['mensagem']); ?></td>
-                        </tr>
-                    <?php } ?>
-                </tbody>
-            </table>
-        <?php } else { ?>
-            <p>Não há mensagens do administrador no momento.</p>
-        <?php } ?>
-    </div>
-    <div class="card p-4 my-4">
-    <div class="form-group">
-        <h2>Enviar Nova Atividade</h2>
-        <?php if ($success_message) { ?>
-            <div class="alert alert-success"><?php echo htmlspecialchars($success_message); ?></div>
-        <?php } ?>
-        <?php if ($error_message) { ?>
-            <div class="alert alert-error"><?php echo htmlspecialchars($error_message); ?></div>
-        <?php } ?>
-        <form method="post" action="" enctype="multipart/form-data">
-            <label for="descricao">Descrição da Atividade:</label>
-            <input type="text" id="descricao" name="descricao" required>
+<script>
+    // Dados das atividades notificadas do PHP para o JavaScript
+    const atividadesNotificacao = <?php echo json_encode($atividadesNotificacao); ?>;
 
-            <label for="horas">Horas:</label>
-            <input type="number" id="horas" name="horas" required>
-
-            <label for="certificado">Enviar Certificado (PDF ou Imagem):</label>
-            <input type="file" id="certificado" name="certificado" accept=".pdf, image/*" required>
-
-            <label for="categoria">Categoria:</label>
-<select name="categoria" id="categoria" class="form-control" required>
-    <option value="">Selecione uma categoria</option>
-    <?php
-    // Aqui você pode construir as opções com base no barema correto do tipo de curso
-    if (isset($tipo_curso)) {
-        $tabela_barema = $tipo_curso === 'bacharelado' ? 'baremabacharelado' : 'baremalicenciatura';
-        
-        $queryCategorias = "SELECT * FROM $tabela_barema"; // Seleciona todas as categorias do barema
-        $resultCategorias = mysqli_query($conexao, $queryCategorias);
-
-        while ($categoria = mysqli_fetch_assoc($resultCategorias)) {
-            echo '<option value="' . $categoria['id'] . '">' . htmlspecialchars($categoria['nome']) . '</option>';
-        }
+    // Exibir mensagens de notificação
+    if (atividadesNotificacao.length > 0) {
+        atividadesNotificacao.forEach(atividade => {
+            const mensagem = `A sua atividade "${atividade.descricao}" foi ${atividade.status === 'aprovado' ? 'aprovada' : 'negada'}.`;
+            alert(mensagem); // Popup simples
+        });
     }
-    ?>
-</select>
-            <div class="text-center mb-4">
-                <input type="submit" value="Enviar Atividade">
-            </div>
-        </form>
+</script>
+<div class="container mt-5">
+    <div class="card p-4 my-4">
+        <div class="form-group">
+            <h2>Enviar Nova Atividade</h2>
+            <?php if ($success_message) { ?>
+                <div class="alert alert-success"><?php echo htmlspecialchars($success_message); ?></div>
+            <?php } ?>
+            <?php if ($error_message) { ?>
+                <div class="alert alert-error"><?php echo htmlspecialchars($error_message); ?></div>
+            <?php } ?>
+            <form method="post" action="" enctype="multipart/form-data">
+                <label for="descricao">Descrição da Atividade:</label>
+                <input type="text" id="descricao" name="descricao" required>
+
+                <label for="horas">Horas:</label>
+                <input type="number" id="horas" name="horas" required>
+
+                <label for="certificado">Enviar Certificado (PDF ou Imagem):</label>
+                <input type="file" id="certificado" name="certificado" accept=".pdf, image/*" required>
+
+                <label for="categoria">Categoria:</label>
+        <select name="categoria" id="categoria" class="form-control" required>
+            <option value="">Selecione uma categoria</option>
+            <?php
+            // Aqui você pode construir as opções com base no barema correto do tipo de curso
+            if (isset($tipo_curso)) {
+                $tabela_barema = $tipo_curso === 'bacharelado' ? 'baremabacharelado' : 'baremalicenciatura';
+                
+                $queryCategorias = "SELECT * FROM $tabela_barema"; // Seleciona todas as categorias do barema
+                $resultCategorias = mysqli_query($conexao, $queryCategorias);
+
+                while ($categoria = mysqli_fetch_assoc($resultCategorias)) {
+                    echo '<option value="' . $categoria['id'] . '">' . htmlspecialchars($categoria['nome']) . '</option>';
+                }
+            }
+            ?>
+        </select>
+                <div class="text-center mb-4">
+                    <input type="submit" value="Enviar Atividade">
+                </div>
+            </form>
+        </div>
     </div>
 </div>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const totalHoras = <?php echo json_encode($total_horas); ?>;
+        const limiteHoras = <?php echo json_encode($total_horas_exigidas); ?>;
+        const submitButton = document.querySelector('form input[type="submit"]');
+
+        if (totalHoras >= limiteHoras) {
+            submitButton.disabled = true;
+            alert('Você já atingiu o limite de 200 horas complementares.');
+        }
+    });
+</script>
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
