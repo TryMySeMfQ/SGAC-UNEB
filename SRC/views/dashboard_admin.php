@@ -220,6 +220,27 @@ if ($row = $resultTipoCurso->fetch_assoc()) {
 }
 $stmtTipoCurso->close();
 
+// Verificar se o tipo de curso é bacharelado ou licenciatura
+$tabela_barema = ($tipo_curso_aluno === 'bacharelado') ? 'baremabacharelado' : 'baremalicenciatura';
+
+// Consultar as atividades do aluno baseado no tipo de curso
+$stmtAtividades = $conexao->prepare("
+     SELECT a.*, b.nome AS categoria_nome
+     FROM atividades a
+     LEFT JOIN $tabela_barema b ON a.categoria_id = b.id
+     WHERE a.matricula_aluno = ?;
+");
+
+$stmtAtividades->bind_param('i', $matricula_aluno);
+$stmtAtividades->execute();
+$resultAtividades = $stmtAtividades->get_result();
+
+// Adicionar as atividades na array
+while ($atividade = $resultAtividades->fetch_assoc()) {
+    $atividades[] = $atividade;
+}
+$stmtAtividades->close();
+
 
 ?>
 
@@ -414,6 +435,7 @@ $stmtTipoCurso->close();
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+
 
 
 
