@@ -1,7 +1,7 @@
 /* Estilo básico */
 body {
-    font-family: Arial, sans-serif;
-    background-color: #daf0ff;
+    font-family: 'Roboto', Arial, sans-serif; /* Fonte principal */
+    background: linear-gradient(to bottom right, #80d0ff, #daf0ff); /* Gradiente */
     margin: 0;
     padding: 0;
     display: flex;
@@ -22,15 +22,30 @@ body {
 }
 
 h1 {
-    font-size: 28px;
+    font-family: 'Montserrat', sans-serif; /* Fonte para títulos */
+    font-size: 32px; /* Aumenta o tamanho */
     color: #333;
     margin-bottom: 20px;
+    line-height: 1.4; /* Melhora a legibilidade */
+}
+
+h1 .highlight {
+    color: #007bff; /* Cor destacada */
+    font-weight: 700; /* Destaque com peso maior */
 }
 
 p {
     font-size: 16px;
+    font-weight: 300; /* Fonte leve para contraste */
     color: #666;
     margin-bottom: 30px;
+    line-height: 1.6; /* Melhora o espaçamento entre linhas */
+}
+
+p.credit {
+    font-size: 14px;
+    color: #999;
+    font-style: italic; /* Diferencia o crédito */
 }
 
 a {
@@ -38,6 +53,8 @@ a {
     margin: 10px;
     padding: 15px 25px;
     font-size: 16px;
+    font-family: 'Montserrat', sans-serif; /* Uniformiza com o título */
+    font-weight: 700; /* Dá destaque ao botão */
     color: white;
     background-color: #007bff;
     border-radius: 5px;
